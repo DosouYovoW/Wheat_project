@@ -1,6 +1,6 @@
 Compositional Spectral Balances for Random Forest Prediction of Spring Wheat Yield in Commercial Fields Using Sentinel-2 Imagery. 
 
-Wilfried Dossou-Yovo1*, Balwinder Kumar1, Haben Asgedom Tedla2, Haider Habbas1 
+Wilfried Dossou-Yovo1, Balwinder Kumar1, Haben Asgedom Tedla2, Haider Habbas1 
 
 1 Lakeland College, Vermilion, Alberta, Canada.       
 2 Agriculture and Agri-Food Canada (AAFC), Saskatoon, Saskatchewan, Canada.        
@@ -28,7 +28,7 @@ Keywords: compositional data analysis; isometric log-ratio; Sentinel-2; spring w
 <img width="4800" height="3000" alt="ILR_ELA_plot" src="https://github.com/user-attachments/assets/8c66378a-49ef-4d08-a844-7518de885b57" />    
  Figure: Accumulated local effects (ALE) of eight ILR spectral balances on spring wheat yield predicted by the baseline random forest model.
 
- <img width="6000" height="3000" alt="corr_plot" src="https://github.com/user-attachments/assets/823b59c8-369a-479e-834a-052412ebba59" />. 
- Figure: Pairwise correlation structure of (A) conventional vegetation indices and (B) isometric log-ratio (ILR) spectral balances derived from Sentinel-2 imagery. Values represent Pearson correlation coefficients.
+ <img width="6000" height="3000" alt="corr_plot" src="https://github.com/user-attachments/assets/823b59c8-369a-479e-834a-052412ebba59" />          
+Figure: Pairwise correlation structure of (A) conventional vegetation indices and (B) isometric log-ratio (ILR) spectral balances derived from Sentinel-2 imagery. Values represent Pearson correlation coefficients.
 
 
