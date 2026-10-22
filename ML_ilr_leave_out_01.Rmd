@@ -1,0 +1,339 @@
+---
+title: "Machine_learnig"
+output: html_document
+date: "2026-05-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Libraries
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(ranger)
+library(xgboost)
+library(kernlab)
+library(vip)
+library(doParallel)
+```
+
+# Recipe
+```{r}
+# train_common must contain the sampled training rows and their year
+ilr_recipe_rf <- recipe(Yield_avg ~ ., data = train_ilr) %>%
+  step_zv(all_numeric_predictors())
+```
+
+# Model specifications
+```{r}
+rf_spec <- rand_forest(
+  mtry  = tune(),
+  trees = 1000,
+  min_n = tune()
+) %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("regression")
+```
+
+# Workflows
+```{r}
+rf_wf <- workflow() %>%
+  add_recipe(ilr_recipe_rf) %>%
+  add_model(rf_spec)
+```
+
+# Parallel processing
+```{r}
+cl <- makePSOCKcluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+```
+
+# Tuning grids
+```{r}
+set.seed(123)
+
+rf_grid <- grid_regular(
+  mtry(range = c(2, 8)),
+  min_n(range = c(2, 25)),
+  levels = 6
+)
+```
+
+# Tune models
+```{r}
+#metrics_used <- yardstick::metric_set(rmse, rsq, mae)
+metrics_used <- yardstick::metric_set(
+  yardstick::rmse,
+  yardstick::rsq,
+  yardstick::mae
+)
+
+
+rf_tune <- tune_grid(
+  rf_wf,
+  resamples = cv_folds_ilr,
+  grid = rf_grid,
+  metrics = metrics_used
+)
+stopCluster(cl)
+```
+
+
+```{r}
+show_best(rf_tune, metric = "rsq", n = 10)
+```
+
+
+# Best models based on RMSE
+```{r}
+best_rf  <- select_best(rf_tune, metric = "rmse")
+best_rf
+```
+
+# Finalize workflows
+```{r}
+final_rf_wf  <- finalize_workflow(rf_wf, best_rf)
+```
+
+# Fit final models on training data and evaluate on test data
+```{r}
+data_split <- make_splits(train_ilr, test_ilr)
+rf_final <- last_fit(final_rf_wf, data_split, metrics = metrics_used)
+```
+
+# Compare performance
+```{r}
+model_results <-
+  collect_metrics(rf_final)  %>% dplyr::mutate(model = "Random Forest") %>%
+  dplyr::select(model, .metric, .estimate) %>% 
+  pivot_wider(names_from = .metric, values_from = .estimate)
+
+model_results
+
+```
+
+
+# Get predictions
+```{r}
+rf_pred <- collect_predictions(rf_final) %>%
+  mutate(model = "Random Forest")
+
+all_predictions <- rf_pred
+```
+
+
+# Observed vs predicted plot
+```{r}
+# Fit finalized RF workflow on training data only
+rf_fit_train <- fit(final_rf_wf, data = train_ilr)
+
+# Training, internal testing and 2024 validation predictions
+all_predictions_ilr <- bind_rows(
+  # Training: 80% of sampled 2019–2023 observations
+  predict(rf_fit_train, new_data = train_ilr) %>%
+    bind_cols(train_ilr) %>%
+    mutate(dataset = "Training", model = "Random Forest"),
+
+  # Internal testing: remaining 20%
+  predict(rf_fit_train, new_data = test_ilr) %>%
+    bind_cols(test_ilr) %>%
+    mutate(dataset = "Testing", model = "Random Forest"),
+
+  # Temporal validation: 2024
+  predict(rf_fit_train, new_data = validation_ilr) %>%
+    bind_cols(validation_ilr) %>%
+    mutate(dataset = "Validation (2024)", model = "Random Forest")
+) %>%
+  mutate(
+    dataset = factor(
+      dataset,
+      levels = c("Training", "Testing", "Validation (2024)")
+    ),
+    model = factor(model, levels = "Random Forest")
+  )
+
+# Metrics for each dataset
+metrics_plot <- all_predictions_ilr %>%
+  group_by(dataset, model) %>%
+  summarise(
+    R2   = yardstick::rsq_trad_vec(Yield_avg, .pred),
+    RMSE = yardstick::rmse_vec(Yield_avg, .pred),
+    MAE  = yardstick::mae_vec(Yield_avg, .pred),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf(
+      "R² = %.2f\nRMSE = %.2f\nMAE = %.2f",
+      R2, RMSE, MAE
+    ),
+    x = Inf,
+    y = -Inf
+  )
+
+print(metrics_plot)
+```
+
+```{r}
+dataset_levels <- c("Training", "Testing", "Validation (2024)")
+
+ILR_pred <- all_predictions_ilr %>%
+  mutate(
+    dataset = factor(dataset, levels = dataset_levels)
+  ) %>%
+  ggplot(aes(Yield_avg, .pred)) +
+  geom_point(
+    colour = "#009E73",
+    alpha = 0.3
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+  ) +
+  geom_label(
+    data = metrics_plot %>%
+      mutate(
+        dataset = factor(dataset, levels = dataset_levels)
+      ),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.05,
+    vjust = -0.1,
+    size = 4
+  ) +
+  facet_grid(
+    dataset ~ model,
+    scales = "fixed",
+    labeller = labeller(
+      dataset = c(
+        "Training" = "Training",
+        "Testing" = "Internal testing",
+        "Validation (2024)" = "Validation (2024)"
+      )
+    )
+  ) +
+  labs(
+    x = expression("Observed yield" ~ (bu ~ ac^{-1})),
+    y = expression("Predicted yield" ~ (bu ~ ac^{-1})),
+    title = "(B) ILR spectral balances"
+  ) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  )
+
+ILR_pred
+ggsave("Figures/Figures_01/ILR_pred_plot.png", width = 6, height = 5, dpi = 600)
+```
+```{r}
+ilr_pred <- all_predictions_ilr %>%
+  filter(dataset == "Validation (2024)") %>%
+  ggplot(aes(Yield_avg, .pred)) +
+  geom_point(
+    colour = "#009E73",
+    alpha = 0.3
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    colour = "red"
+  ) +
+  geom_label(
+    data = metrics_plot %>%
+      filter(dataset == "Validation (2024)"),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.1,
+    vjust = -0.1,
+    size = 4
+  ) +
+  facet_grid(. ~ model) +
+  scale_x_continuous(
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0, NA),
+    breaks = seq(0, 125, by = 25),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    x = expression("Observed yield" ~ (bu ~ ac^{-1})),
+    y = expression("Predicted yield" ~ (bu ~ ac^{-1})),
+    title = "(B) ILR spectral balances"
+  ) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  )
+
+ilr_pred
+ggsave("Figures/Figures_01/ILR_pred_plot_2024.png", width = 6, height = 5, dpi = 600)
+```
+
+# Metrics table
+```{r}
+# RF metrics for training, internal testing and 2024 validation
+metrics_table <- all_predictions_ilr %>%
+  filter(model == "Random Forest") %>%
+  mutate(
+    dataset = factor(
+      dataset,
+      levels = c("Training", "Testing", "Validation (2024)")
+    ),
+    model = factor(model, levels = "Random Forest")
+  ) %>%
+  group_by(dataset, model) %>%
+  summarise(
+    n    = n(),
+    R2   = yardstick::rsq_vec(truth = Yield_avg, estimate = .pred),
+    RMSE = yardstick::rmse_vec(truth = Yield_avg, estimate = .pred),
+    MAE  = yardstick::mae_vec(truth = Yield_avg, estimate = .pred),
+    .groups = "drop"
+  ) %>%
+  arrange(dataset) %>%
+  mutate(
+    across(c(R2, RMSE, MAE), ~ round(.x, 2))
+  )
+
+metrics_table
+```
+
+
+# Variable importance for Random Forest
+```{r}
+rf_fit <- extract_workflow(rf_final) %>%
+  extract_fit_parsnip()
+vip(rf_fit, num_features = 15,
+    aesthetics = list(fill = "midnightblue",
+                      colour = "midnightblue")) +
+  labs(title = "(B) ILR spectral balances") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14)
+  )
+ggsave("Figures/Figures_01/ILR_VarImp_plot.png", width = 6, height = 5, dpi = 600)
+```
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,353 @@
+---
+title: "Machine_learnig"
+output: html_document
+date: "2026-05-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Libraries
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(ranger)
+library(xgboost)
+library(kernlab)
+library(vip)
+library(doParallel)
+```
+
+# Recipe
+```{r}
+VI_recipe_corr_pca <- recipe(Yield_avg ~ ., data = train_vi) %>%
+  step_zv(all_numeric_predictors()) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.90) %>%
+  step_normalize(all_numeric_predictors()) |> 
+  step_pca(
+    all_numeric_predictors(),
+    threshold = 0.99
+  )
+```
+
+# Model specifications
+```{r}
+VI_rf_spec <- rand_forest(
+  mtry  = tune(),
+  trees = 1000,
+  min_n = tune()
+) %>%
+  set_engine("ranger", importance = "permutation") %>%
+  set_mode("regression")
+```
+
+# Workflows
+```{r}
+VI_rf_wf <- workflow() %>%
+  add_recipe(VI_recipe_corr_pca) %>%
+  add_model(VI_rf_spec)
+```
+
+## Parallel processing
+```{r}
+cl <- makePSOCKcluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+```
+
+### Tuning grids
+```{r}
+set.seed(123)
+
+VI_rf_grid <- grid_regular(
+  mtry(range = c(2, 8)),
+  min_n(range = c(2, 25)),
+  levels = 6
+)
+```
+
+# Tune models
+```{r}
+VI_metrics_used <- yardstick::metric_set(
+  yardstick::rmse,
+  yardstick::rsq,
+  yardstick::mae
+)
+
+VI_rf_tune <- tune_grid(
+  VI_rf_wf,
+  resamples = cv_folds_vi,
+  grid = VI_rf_grid,
+  metrics = VI_metrics_used
+)
+stopCluster(cl)
+```
+
+# Best models based on RMSE
+```{r}
+VI_best_rf  <- select_best(VI_rf_tune, metric = "rmse")
+VI_best_rf
+```
+
+# Finalize workflows
+```{r}
+VI_final_rf_wf  <- finalize_workflow(VI_rf_wf, VI_best_rf)
+```
+
+# Fit final models on training data and evaluate on test data
+```{r}
+data_split <- make_splits(train_vi, test_vi)
+
+VI_rf_final <- last_fit(
+  VI_final_rf_wf, data_split, metrics = VI_metrics_used
+)
+```
+
+
+# Compare performance
+```{r}
+model_results_VI <- collect_metrics(VI_rf_final)  %>% mutate(model = "Random Forest")%>%
+  dplyr::select(model, .metric, .estimate) %>%
+  pivot_wider(names_from = .metric, values_from = .estimate)
+
+model_results_VI
+```
+
+# Get predictions
+```{r}
+VI_rf_pred <- collect_predictions(VI_rf_final) %>%
+  mutate(model = "Random Forest")
+
+VI_all_predictions <- VI_rf_pred
+```
+
+# Observed vs predicted plot
+```{r}
+# Fit finalized RF workflow on training data only
+VI_rf_fit_train <- fit(VI_final_rf_wf, data = train_vi)
+
+# Training, internal testing and 2024 validation predictions
+all_predictions_VI <- bind_rows(
+  # Training: 80% of sampled 2019–2023 observations
+  predict(VI_rf_fit_train, new_data = train_vi) %>%
+    bind_cols(train_vi) %>%
+    mutate(dataset = "Training", model = "Random Forest"),
+
+  # Internal testing: remaining 20%
+  predict(VI_rf_fit_train, new_data = test_vi) %>%
+    bind_cols(test_vi) %>%
+    mutate(dataset = "Testing", model = "Random Forest"),
+
+  # Temporal validation: 2024
+  predict(VI_rf_fit_train, new_data = validation_vi) %>%
+    bind_cols(validation_vi) %>%
+    mutate(dataset = "Validation (2024)", model = "Random Forest")
+) %>%
+  mutate(
+    dataset = factor(
+      dataset,
+      levels = c("Training", "Testing", "Validation (2024)")
+    ),
+    model = factor(model, levels = "Random Forest")
+  )
+
+# Metrics for each dataset
+VI_metrics_plot <- all_predictions_VI %>%
+  group_by(dataset, model) %>%
+  summarise(
+    R2   = yardstick::rsq_vec(Yield_avg, .pred),
+    RMSE = yardstick::rmse_vec(Yield_avg, .pred),
+    MAE  = yardstick::mae_vec(Yield_avg, .pred),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf(
+      "R² = %.2f\nRMSE = %.2f\nMAE = %.2f",
+      R2, RMSE, MAE
+    ),
+    x = Inf,
+    y = -Inf
+  )
+print(VI_metrics_plot)
+```
+
+```{r}
+dataset_levels <- c("Training", "Testing", "Validation (2024)")
+
+VI_pred <- all_predictions_VI %>%
+  mutate(
+    dataset = factor(dataset, levels = dataset_levels)
+  ) %>%
+  ggplot(aes(Yield_avg, .pred)) +
+  geom_point(
+    colour = "#009E73",
+    alpha = 0.3
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    colour = "black",
+    linewidth = 0.7,
+    fullrange = TRUE
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+  ) +
+  geom_label(
+    data = VI_metrics_plot %>%
+      mutate(
+        dataset = factor(dataset, levels = dataset_levels)
+      ),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.05,
+    vjust = -0.1,
+    size = 4
+  ) +
+  facet_grid(
+    dataset ~ model,
+    scales = "fixed",
+    labeller = labeller(
+      dataset = c(
+        "Training" = "Training",
+        "Testing" = "Internal testing",
+        "Validation (2024)" = "Validation (2024)"
+      )
+    )
+  ) +
+  labs(
+    x = expression("Observed yield" ~ (bu ~ ac^{-1})),
+    y = expression("Predicted yield" ~ (bu ~ ac^{-1})),
+    title = "(A) Vegetation indices"
+  ) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  )
+
+VI_pred
+ggsave("Figures/Figures_04/VI_pred_corr_pca.png", width = 6, height = 5, dpi = 600)
+```
+
+```{r}
+VI_pred <- all_predictions_VI %>%
+  filter(dataset == "Validation (2024)") %>%
+  ggplot(aes(Yield_avg, .pred)) +
+  geom_point(
+    colour = "#009E73",
+    alpha = 0.3
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    colour = "black",
+    linewidth = 0.7,
+    fullrange = TRUE
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    colour = "red"
+  ) +
+  geom_label(
+    data = VI_metrics_plot %>%
+      filter(dataset == "Validation (2024)"),
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 1.1,
+    vjust = -0.1,
+    size = 4
+  ) +
+  facet_grid(. ~ model) +
+  scale_x_continuous(
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0, NA),
+    breaks = seq(0, 125, by = 25),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    x = expression("Observed yield" ~ (bu ~ ac^{-1})),
+    y = expression("Predicted yield" ~ (bu ~ ac^{-1})),
+    title = "(A) Vegetation indices"
+  ) +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    strip.text = element_text(size = 14)
+  )
+
+VI_pred
+ggsave("Figures/Figures_04/VI_pred_corr_pca_2024.png", width = 6, height = 5, dpi = 600)
+```
+
+# Metrics table
+```{r}
+# VI metrics: RF only
+metrics_table_VI <- all_predictions_VI %>%
+  filter(model == "Random Forest") %>%
+  mutate(
+    dataset = factor(
+      dataset,
+      levels = c("Training", "Testing", "Validation (2024)")
+    ),
+    model = factor(model, levels = "Random Forest")
+  ) %>%
+  group_by(dataset, model) %>%
+  summarise(
+    n    = n(),
+    R2   = yardstick::rsq_vec(truth = Yield_avg, estimate = .pred),
+    RMSE = yardstick::rmse_vec(truth = Yield_avg, estimate = .pred),
+    MAE  = yardstick::mae_vec(truth = Yield_avg, estimate = .pred),
+    .groups = "drop"
+  ) %>%
+  arrange(dataset) %>%
+  mutate(
+    across(c(R2, RMSE, MAE), ~ round(.x, 2))
+  )
+
+metrics_table_VI
+```
+
+
+# Variable importance for Random Forest
+```{r}
+rf_fit_VI <- extract_workflow(VI_rf_final) %>%
+  extract_fit_parsnip()
+
+vip(rf_fit_VI, num_features = 15,
+    aesthetics = list(fill = "midnightblue",
+                      colour = "midnightblue")) +
+  labs(title = "(A) Vegetation Indices") +
+  theme_bw() +
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 14)
+  )
+ggsave("Figures/Figures_04/VI_VarImp_corr_pca.png", width = 6, height = 5, dpi = 600)
+```
+
+
+
+
+
+
+
+
+
+
+
+

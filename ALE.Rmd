@@ -1,0 +1,212 @@
+---
+title: "ALE"
+output: html_document
+date: "2026-10-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(iml)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+```
+
+```{r}
+# Original ILR predictors, before recipe preprocessing
+X_ilr <- train_ilr %>%
+  dplyr::select(-Yield_avg) %>%
+  as.data.frame()
+
+# Predict through the complete fitted workflow
+pred_fun_ilr <- function(model, newdata) {
+  predict(model, new_data = newdata)$.pred
+}
+
+# Create the predictor used in your ILR ALE code
+rf_predictor <- iml::Predictor$new(
+  model = rf_fit_train,
+  data = X_ilr,
+  y = train_ilr$Yield_avg,
+  predict.function = pred_fun_ilr
+)
+```
+
+```{r}
+# All eight ILR balances
+ilr_features <- paste0("ILR", 1:8)
+
+# Extract ALE results
+ale_data <- purrr::map_dfr(
+  ilr_features,
+  function(variable) {
+
+    effect <- iml::FeatureEffect$new(
+      predictor = rf_predictor,
+      feature = variable,
+      method = "ale",
+      grid.size = 20
+    )
+
+    effect$results %>%
+      dplyr::transmute(
+        ILR = variable,
+        value = .data[[variable]],
+        ALE = .value
+      )
+  }
+) %>%
+  dplyr::mutate(
+    ILR = factor(ILR, levels = ilr_features)
+  )
+
+# Plot ALE curves
+ggplot(ale_data, aes(x = value, y = ALE)) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "grey60"
+  ) +
+ # geom_smooth(se = F)+
+  geom_line(
+    colour = "midnightblue",
+    linewidth = 0.9
+  ) +
+  geom_point(
+    colour = "midnightblue",
+    size = 2,
+    alpha = 0.5
+  ) +
+  facet_wrap(~ ILR, scales = "free_x", ncol = 3) +
+  scale_x_continuous(
+    breaks = scales::breaks_pretty(n = 3),
+    labels = scales::label_number(accuracy = 0.01),
+    guide = guide_axis(check.overlap = TRUE)
+  ) +
+  labs(
+    #title = "Random Forest: ILR spectral balances",
+    x = "ILR value",
+    y = expression("ALE effect on predicted yield" ~ (bu ~ ac^{-1}))
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(size = 10),
+    panel.spacing = grid::unit(1, "lines")
+  )
+ggsave("Figures/Figures_01/ILR_ELA_plot_line.png", width = 8, height = 5, dpi = 600)
+```
+
+```{r}
+# Original VI predictors, before recipe preprocessing
+X_vi <- train_vi %>%
+  dplyr::select(-Yield_avg) %>%
+  as.data.frame()
+
+# Predict through the complete fitted workflow
+pred_fun_vi <- function(model, newdata) {
+  predict(model, new_data = newdata)$.pred
+}
+
+rf_predictor_vi <- iml::Predictor$new(
+  model = VI_rf_fit_train,
+  data = X_vi,
+  y = train_vi$Yield_avg,
+  predict.function = pred_fun_vi
+)
+
+# VIs to interpret
+vi_features <- c(
+  "NDVI", "GNDVI", "SAVI", "NDRE", "NDMI",
+  "EVI", "BSI", "CIrededge", "MSI"
+)
+
+# Calculate and extract ALE results
+ale_data_vi <- purrr::map_dfr(
+  vi_features,
+  function(variable) {
+
+    effect <- iml::FeatureEffect$new(
+      predictor = rf_predictor_vi,
+      feature = variable,
+      method = "ale",
+      grid.size = 20
+    )
+
+    effect$results %>%
+      dplyr::transmute(
+        VI = variable,
+        value = .data[[variable]],
+        ALE = .value
+      )
+  }
+)
+
+# Preserve the specified facet order
+ale_data_vi <- ale_data_vi %>%
+  dplyr::mutate(
+    VI = factor(VI, levels = vi_features)
+  )
+
+# Plot ALE curves
+ggplot(ale_data_vi, aes(x = value, y = ALE)) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "grey60"
+  ) +
+ # geom_smooth(se = F)+
+  geom_line(
+    colour = "midnightblue",
+    linewidth = 0.9
+  ) +
+  geom_point(
+    colour = "midnightblue",
+    size = 2,
+    alpha = 0.5
+  ) +
+  facet_wrap(~ VI, scales = "free_x", ncol = 3) +
+  labs(
+    #title = "Random Forest: Vegetation indices",
+    x = "Vegetation index value",
+    y = expression("ALE effect on predicted yield" ~ (bu ~ ac^{-1}))
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold")
+  )+
+  scale_x_continuous(
+    breaks = scales::breaks_pretty(n = 3),
+    labels = scales::label_number(
+      accuracy = 0.01,
+      trim = TRUE
+    ),
+    guide = guide_axis(check.overlap = TRUE)
+  ) 
+ggsave("Figures/Figures_01/VI_ELA_plot_line.png", width = 8, height = 5, dpi = 600)
+```
+
+
+```{r}
+train_vi %>%
+  dplyr::select(NDVI, SAVI, EVI) %>%  # Select these three indices
+  cor(use = "complete.obs")           # Calculate their correlations
+```
+
+
+
+
+
+
+
+
+
+
+
+

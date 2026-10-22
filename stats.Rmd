@@ -1,0 +1,976 @@
+---
+title: "Stats"
+output: html_document
+date: "2026-05-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+citation()
+R.version.string
+```
+
+# Load Libraries
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(compositions)
+library(GGally)
+library(writexl)
+library(ggrepel)
+library(patchwork)
+library(viridis)
+library(tidyr)
+library(tibble)
+```
+
+# Load data
+```{r}
+AL01_wheat_2022 <- read_csv("data/AL01_wheat_slope_2022_40m_buffer.csv") %>% 
+  mutate(location = "AL_01", 
+         year = 2022)
+
+AL1_3_wheat_2020_40m_buffer <- read_csv("data/AL1_3_wheat_slope_2020_40m_buffer.csv") %>% 
+  mutate(location = "AL_1_3",
+         GNDVI = (B08-B03)/(B08+B03),
+         year = 2020)
+
+LC14_wheat_2024_40m_buffer <- read_csv("data/LC14_wheat_2024_40m_buffer.csv") %>% 
+  mutate(location = "LC14",
+         year = 2024)
+
+LC18_wheat_2023_40m_buffer <- read_csv("data/LC18_wheat_2023_40m_buffer.csv") %>% 
+  mutate(location = "LC18",
+         year = 2023)
+
+LC20_wheat_2021_40m_buffer <- read_csv("data/LC20_wheat_2021_40m_buffer.csv") %>% 
+  mutate(location = "LC20",
+         year = 2021)
+
+LC19_wheat_2019_40m_buffer <- read_csv("data/LC19_wheat_2019_40m_buffer.csv") %>% 
+  mutate(location = "LC19",
+         year = 2019)
+  
+```
+
+```{r}
+final_data <- AL1_3_wheat_2020_40m_buffer %>%
+  bind_rows(AL01_wheat_2022) %>%
+  bind_rows(LC14_wheat_2024_40m_buffer) %>%
+  bind_rows(LC18_wheat_2023_40m_buffer) %>%
+  bind_rows(LC20_wheat_2021_40m_buffer) %>%
+  bind_rows(LC19_wheat_2019_40m_buffer) %>%
+  mutate(
+    # Scale reflectance for indices containing additive constants
+    B08_scaled = B08 / 10000,
+    B04_scaled = B04 / 10000,
+    B02_scaled = B02 / 10000,
+
+    # Vegetation indices
+    NDVI = (B08 - B04) / (B08 + B04),
+    GNDVI = (B08 - B03) / (B08 + B03),
+    NDRE = (B08 - B05) / (B08 + B05),
+    CIrededge = (B08 / B05) - 1,
+    NDMI = (B08 - B11) / (B08 + B11),
+    MSI = B11 / B08,
+
+    SAVI = 1.5 * (B08_scaled - B04_scaled) /
+      (B08_scaled + B04_scaled + 0.5),
+
+    EVI = 2.5 * (B08_scaled - B04_scaled) /
+      (B08_scaled + 6 * B04_scaled -
+         7.5 * B02_scaled + 1),
+
+    BSI = ((B11 + B04) - (B08 + B02)) /
+      ((B11 + B04) + (B08 + B02))
+  )
+    
+   # NDWI  = (B03 - B08) / (B03 + B08),
+   # NDSI  = (B03 - B11) / (B03 + B11),
+   # NBR   = (B08 - B12) / (B08 + B12),
+   # NDBI  = (B11 - B08) / (B11 + B08),
+    
+    
+   
+
+    # 🌱 Chlorophyll (Nitrogen-sensitive)
+    #CIgreen    = (B08 / B03) - 1,
+    
+
+    # 🌍 Soil-adjusted vegetation
+    
+
+    # 🌿 Enhanced vegetation index (better in dense canopy)
+   # EVI = 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1)
+   # Scale bands to 0-1 range first
+
+  
+```
+
+```{r}
+AL1_3_wheat_2020_40m_buffer %>%
+  summarise(
+    across(
+      c(B02, B04, B08),
+      list(
+        min = ~ min(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      )
+    )
+  )
+```
+
+
+```{r}
+ggplot(final_data,
+       aes(x = (left + right)/2,
+           y = (top + bottom)/2,
+           fill = Yield_avg)) +
+  geom_tile(width = 10,
+            height = 10) +
+  scale_fill_viridis_c() +
+  coord_fixed() +
+  theme_bw()
+```
+
+
+
+```{r}
+data_model <- final_data |> 
+  dplyr::select(
+    Yield_avg,
+    NDVI, GNDVI, SAVI, NDRE, NDMI, EVI, BSI, CIrededge, MSI
+  )
+```
+
+# Indices Correlation analysis
+```{r}
+vi_data <- data_model %>%
+  dplyr::select(-Yield_avg)
+
+corr_matrix <- cor(
+  vi_data,
+  use = "everything",
+  method = "pearson"
+)
+
+vars <- colnames(corr_matrix)
+n_vars <- length(vars)
+
+cell_index <- which(upper.tri(corr_matrix), arr.ind = TRUE)
+
+corr_data <- data.frame(
+  row_id = cell_index[, 1],
+  col_id = cell_index[, 2],
+  correlation = corr_matrix[cell_index]
+) %>%
+  mutate(
+    label = ifelse(
+      is.na(correlation), "",
+      sprintf("%.2f", correlation)
+    ),
+    text_colour = ifelse(
+      is.na(correlation), "black",
+      ifelse(abs(correlation) >= 0.65, "white", "black")
+    )
+  )
+
+row_labels <- data.frame(
+  row_id = 1:(n_vars - 1),
+  col_id = (1:(n_vars - 1)) + 0.4,
+  label = vars[1:(n_vars - 1)]
+)
+
+column_labels <- data.frame(
+  row_id = 0.4,
+  col_id = 2:n_vars,
+  label = vars[2:n_vars]
+)
+
+VI_corr_plot <- ggplot(
+  corr_data,
+  aes(x = col_id, y = row_id, fill = correlation)
+) +
+  geom_tile(
+    color = "white",
+    linewidth = 0.4,
+    width = 1,
+    height = 1
+  ) +
+  # Column labels placed directly above the cells
+  geom_text(
+    data = column_labels,
+    aes(x = col_id, y = row_id, label = label),
+    inherit.aes = FALSE,
+    angle = 45,
+    hjust = 0,
+    vjust = 0.5,
+    size = 3.8,
+    color = "black"
+  ) +
+  # Row labels follow the stepped edge
+  geom_text(
+    data = row_labels,
+    aes(x = col_id, y = row_id, label = label),
+    inherit.aes = FALSE,
+    hjust = 1,
+    size = 3.8,
+    color = "black"
+  ) +
+  geom_text(
+    aes(label = label, color = text_colour),
+    size = 3.8
+  ) +
+  scale_color_identity() +
+  scale_fill_gradient2(
+    low = "#D73027",
+    mid = "white",
+    high = "#313695",
+    midpoint = 0,
+    limits = c(-1, 1),
+    na.value = "grey90"
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = 0, add = 0)
+  ) +
+  scale_y_reverse(
+    expand = expansion(mult = 0, add = 0)
+  ) +
+  coord_fixed(clip = "off") +
+  labs(
+    title = "(A) Vegetation indices",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.title = element_text(
+      size = 15,
+      margin = margin(b = 65)
+    ),
+    legend.position = "none",
+    plot.margin = margin(15, 40, 15, 65)
+  )
+
+VI_corr_plot
+
+ggsave(
+  "Figures/VI_corr_plot.png",
+  plot = VI_corr_plot,
+  width = 8,
+  height = 6,
+  dpi = 600,
+  bg = "white"
+)
+```
+
+# CoDa
+## Sequential Binary Partition
+```{r}
+sbp <- matrix(c(
+   -1,  -1, - 1,  1, 1, 1, 1, -1, -1,
+   0,  0,  0, -1, -1, -1,  1,  0,  0,
+   0,  0,  0,  1, -1, -1,  0,  0,  0,
+   0,  0,  0,  0,  1, -1,  0,  0,  0,
+   1,  1,  1,  0,  0,  0,  0, -1, -1,
+   1,  -1, -1,  0,  0,  0,  0,  0,  0,
+   0,  1, -1,  0,  0,  0,  0,  0,  0,
+   0,  0,  0,  0,  0,  0,  0,  1, -1
+), 
+nrow = 8, byrow = TRUE)
+
+colnames(sbp) <- c("B02","B03","B04","B05","B06","B07","B08","B11","B12")
+
+sbp_data_frame <- sbp %>% as.data.frame()
+#writexl::write_xlsx(sbp_data_frame, "sbp.xlsx")
+```
+
+## Balance Calculation
+```{r}
+bands <- final_data %>%
+  dplyr::select(B02, B03, B04, B05, B06, B07, B08, B11, B12)
+
+bands_acomp <- acomp(bands)
+
+ilr_bands <- ilr(bands_acomp, V = gsi.buildilrBase(t(sbp)))
+
+ilr_bands <- as.data.frame(ilr_bands)
+
+names(ilr_bands) <- paste0("ILR", 1:8)
+```
+
+```{r}
+final_data_ilr <- bind_cols(
+  final_data,
+  ilr_bands
+)
+```
+
+```{r}
+data_model_ilr <- final_data_ilr %>%
+  dplyr::select(
+    Yield_avg,
+    ILR1, ILR2, ILR3, #BSI,
+    ILR4, ILR5, ILR6, ILR7, ILR8
+    )
+```
+
+```{r}
+plot(bands_acomp)
+pairs(ilr_bands)
+biplot(princomp(acomp(bands)))
+variation(acomp(bands))
+```
+
+```{r}
+V <- gsi.buildilrBase(t(sbp))
+
+round(t(V) %*% V, 6)
+```
+
+```{r}
+# Vegetation indices boxplot
+p_vi_box <- final_data_ilr %>%
+  dplyr::select(
+    NDVI, GNDVI, SAVI, NDRE, NDMI, EVI, BSI, CIrededge, MSI
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  ggplot(aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "#59A14F", alpha = 0.7, outlier.size = 0.7) +
+  labs(
+    title = "A. Vegetation indices",
+    x = NULL,
+    y = "Value"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+
+# ILR balances boxplot
+p_ilr_box <- final_data_ilr %>%
+  dplyr::select(starts_with("ILR")) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  ggplot(aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "#4C78A8", alpha = 0.7, outlier.size = 0.7) +
+  labs(
+    title = "B. ILR spectral balances",
+    x = NULL,
+    y = "Value"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+
+p_vi_box / p_ilr_box
+```
+
+
+
+# ILR Correlation analysis
+```{r}
+ilr_data <- data_model_ilr %>%
+  dplyr::select(-Yield_avg)
+
+corr_matrix <- cor(
+  ilr_data,
+  use = "everything",
+  method = "pearson"
+)
+
+vars <- colnames(corr_matrix)
+n_vars <- length(vars)
+
+cell_index <- which(upper.tri(corr_matrix), arr.ind = TRUE)
+
+corr_data <- data.frame(
+  row_id = cell_index[, 1],
+  col_id = cell_index[, 2],
+  correlation = corr_matrix[cell_index]
+) %>%
+  mutate(
+    label = ifelse(
+      is.na(correlation), "",
+      sprintf("%.2f", correlation)
+    ),
+    text_colour = ifelse(
+      is.na(correlation), "black",
+      ifelse(abs(correlation) >= 0.65, "white", "black")
+    )
+  )
+
+row_labels <- data.frame(
+  row_id = 1:(n_vars - 1),
+  col_id = (1:(n_vars - 1)) + 0.4,
+  label = vars[1:(n_vars - 1)]
+)
+
+column_labels <- data.frame(
+  row_id = 0.4,
+  col_id = 2:n_vars,
+  label = vars[2:n_vars]
+)
+
+ilr_corr_plot <- ggplot(
+  corr_data,
+  aes(x = col_id, y = row_id, fill = correlation)
+) +
+  geom_tile(
+    color = "white",
+    linewidth = 0.4,
+    width = 1,
+    height = 1
+  ) +
+  # Column labels directly above the cells
+  geom_text(
+    data = column_labels,
+    aes(x = col_id, y = row_id, label = label),
+    inherit.aes = FALSE,
+    angle = 45,
+    hjust = 0,
+    vjust = 0.5,
+    size = 3.8,
+    color = "black"
+  ) +
+  # Row labels follow the stepped edge
+  geom_text(
+    data = row_labels,
+    aes(x = col_id, y = row_id, label = label),
+    inherit.aes = FALSE,
+    hjust = 1,
+    size = 3.8,
+    color = "black"
+  ) +
+  # Correlation coefficients inside cells
+  geom_text(
+    aes(label = label, color = text_colour),
+    size = 3.8
+  ) +
+  scale_color_identity() +
+  scale_fill_gradient2(
+    name = "Pearson r",
+    low = "#D73027",
+    mid = "white",
+    high = "#313695",
+    midpoint = 0,
+    limits = c(-1, 1),
+    breaks = c(-1, -0.5, 0, 0.5, 1),
+    na.value = "grey90"
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = 0, add = 0)
+  ) +
+  scale_y_reverse(
+    expand = expansion(mult = 0, add = 0)
+  ) +
+  coord_fixed(clip = "off") +
+  labs(
+    title = "(B) ILR spectral balances",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.title = element_text(
+     # face = "bold",
+      size = 15,
+      margin = margin(b = 65)
+    ),
+    legend.position = "right",
+    plot.margin = margin(15, 40, 15, 65)
+  ) +
+  guides(
+    fill = guide_colorbar(
+      barheight = grid::unit(40, "mm"),
+      barwidth = grid::unit(5, "mm")
+    )
+  )
+
+ilr_corr_plot
+
+ggsave(
+  "Figures/ilr_corr_plot.png",
+  plot = ilr_corr_plot,
+  width = 8,
+  height = 6,
+  dpi = 600,
+  bg = "white"
+)
+```
+
+```{r}
+VI_corr_plot + ilr_corr_plot 
+ggsave("Figures/corr_plot.png", width = 10, height = 5, dpi = 600)
+```
+
+
+
+
+```{r}
+data_model_band <- final_data %>%
+  dplyr::select(
+    Yield_avg,
+    B02, B03, B04, #BSI,
+    B05, B06, B07, B08, B11, B12)
+
+ggcorr(data_model_band %>% 
+         rename(Yield = Yield_avg),
+       method = c("everything", "pearson"),
+       label = TRUE,
+       label_size = 3,
+       size = 4,
+       hjust = 0.75,
+       label_round = 2,
+       layout.exp = 2) +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue",
+                       midpoint = 0, limits = c(-1, 1)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+```
+
+
+```{r}
+rec <- recipe(Yield_avg ~ ., data = data_model) %>%
+  step_corr(
+    NDVI, GNDVI, SAVI, NDRE, NDMI, EVI, BSI, CIrededge, MSI, threshold = 0.85
+    )
+
+prep(rec) %>%
+  bake(new_data = NULL) %>%
+  names()
+```
+
+```{r}
+rec <- recipe(Yield_avg ~ ., data = data_model_ilr) %>%
+  step_corr(ILR1:ILR8, threshold= 0.85)
+
+prep(rec) %>%
+  bake(new_data = NULL) %>%
+  names()
+```
+
+```{r}
+rec <- recipe(Yield_avg ~ ., data = data_model_band) %>%
+  step_corr(B02:B12, threshold= 0.85)
+
+prep(rec) %>%
+  bake(new_data = NULL) %>%
+  names()
+```
+
+# PCA Analaysis
+```{r}
+make_pca_plot <- function(data, vars, yield_var = "Yield_avg",
+                          title_text, arrow_scale = 2.5,
+                          xlim_vals = c(-5, 7.5),
+                          ylim_vals = c(-4, 4),
+                          yield_limits = NULL) {
+
+  pca_data <- data %>%
+    dplyr::select(all_of(c(vars, yield_var))) %>%
+    na.omit()
+
+  pca <- prcomp(
+    pca_data %>% dplyr::select(all_of(vars)),
+    center = TRUE,
+    scale. = TRUE
+  )
+
+  var_exp <- 100 * pca$sdev^2 / sum(pca$sdev^2)
+
+  scores <- as.data.frame(pca$x[, 1:2]) %>%
+    bind_cols(pca_data %>% dplyr::select(all_of(yield_var)))
+
+  names(scores)[3] <- "Yield"
+
+  loadings <- as.data.frame(pca$rotation[, 1:2])
+  loadings$var <- rownames(loadings)
+
+  ggplot(scores, aes(PC1, PC2, color = Yield)) +
+    geom_point(alpha = 0.25, size = 1) +
+
+    geom_segment(
+      data = loadings,
+      aes(
+        x = 0, y = 0,
+        xend = PC1 * arrow_scale,
+        yend = PC2 * arrow_scale
+      ),
+      inherit.aes = FALSE,
+      arrow = grid::arrow(length = grid::unit(0.20, "cm")),
+      linewidth = 0.3,
+      color = "gray30"
+    ) +
+
+    geom_text_repel(
+      data = loadings,
+      aes(
+        x = PC1 * arrow_scale,
+        y = PC2 * arrow_scale,
+        label = var
+      ),
+      inherit.aes = FALSE,
+      fontface = "bold",
+      size = 3.2,
+      color = "black",
+      seed = 123,
+      box.padding = 0.35,
+      point.padding = 0.15,
+      min.segment.length = 0,
+      segment.color = "gray55",
+      segment.size = 0.25,
+      max.overlaps = Inf
+    ) +
+
+    scale_color_gradientn(
+      name = "Yield",
+      colours = c("#D73027", "#FDAE61", "#A6D96A", "#1A9850"),
+      limits = yield_limits,
+      guide = guide_colorbar(
+        barheight = grid::unit(38, "mm"),
+        barwidth = grid::unit(5, "mm")
+      )
+    ) +
+
+    scale_x_continuous(breaks = seq(-5, 7.5, 2.5)) +
+    scale_y_continuous(breaks = seq(-4, 4, 2)) +
+
+    coord_cartesian(
+      xlim = xlim_vals,
+      ylim = ylim_vals
+    ) +
+
+    labs(
+      title = title_text,
+      x = sprintf("PC1 (%.1f%%)", var_exp[1]),
+      y = sprintf("PC2 (%.1f%%)", var_exp[2])
+    ) +
+
+    theme_bw(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(
+        color = "gray92", linewidth = 0.3
+      ),
+      panel.border = element_rect(
+        color = "gray40", linewidth = 0.5
+      ),
+      axis.text = element_text(
+        color = "black", size = 10
+      ),
+      axis.title = element_text(size = 12),
+      plot.title = element_text(
+        size = 14, margin = margin(b = 10)
+      ),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10),
+      plot.margin = margin(10, 12, 10, 10)
+    )
+}
+
+plot_data <- final_data_ilr
+
+vi_vars <- c(
+  "NDVI", "GNDVI", "SAVI", "NDRE", "NDMI",
+  "EVI", "BSI", "CIrededge", "MSI"
+)
+
+ilr_vars <- paste0("ILR", 1:8)
+
+used_yields <- function(vars) {
+  selected <- plot_data %>%
+    dplyr::select(all_of(c(vars, "Yield_avg"))) %>%
+    na.omit()
+
+  selected$Yield_avg
+}
+
+yield_limits <- range(
+  c(used_yields(vi_vars), used_yields(ilr_vars))
+)
+
+p2 <- make_pca_plot(
+  plot_data,
+  vars = vi_vars,
+  title_text = "(A) Vegetation indices",
+  arrow_scale = 2.5,
+  yield_limits = yield_limits
+)
+
+p3 <- make_pca_plot(
+  plot_data,
+  vars = ilr_vars,
+  title_text = "(B) ILR spectral balances",
+  arrow_scale = 2.2,
+  yield_limits = yield_limits
+)
+
+combined_plot <- (p2 + p3) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "right")
+
+combined_plot
+
+ggsave(
+  "PCA_biplots.png", combined_plot,
+  width = 12, height = 5.5, units = "in",
+  dpi = 600, bg = "white"
+)
+
+ggsave("Figures/combined_plot.png", width = 10, height = 5, dpi = 600)
+```
+
+
+```{r}
+get_pca_var <- function(data, vars, label) {
+  
+  pca_input <- data[, vars] %>%
+    na.omit()
+  
+  pca <- prcomp(
+    pca_input,
+    center = TRUE,
+    scale. = TRUE
+  )
+  
+  tibble(
+    PC = paste0("PC", seq_along(pca$sdev)),
+    Variance = (pca$sdev^2 / sum(pca$sdev^2)) * 100,
+    Dataset = label
+  )
+}
+
+pca_raw <- get_pca_var(
+  final_data_ilr,
+  vars = c("B02","B03","B04","B05","B06","B07","B08","B11","B12"),
+  label = "Raw bands"
+)
+
+pca_vi <- get_pca_var(
+  final_data_ilr,
+  vars = c("NDVI","GNDVI","SAVI","NDRE","NDMI","EVI","BSI","CIrededge", "MSI"),
+  label = "Vegetation indices"
+)
+
+pca_ilr <- get_pca_var(
+  final_data_ilr,
+  vars = paste0("ILR", 1:8),
+  label = "ILR balances"
+)
+
+pca_all <- bind_rows(pca_vi, pca_ilr) %>%
+  group_by(Dataset) %>%
+  mutate(
+    PC_num = row_number(),
+    Cumulative = cumsum(Variance)
+  ) %>%
+  ungroup()
+
+ggplot(
+  pca_all,
+  aes(
+    x = PC_num,
+    y = Variance,
+    color = Dataset,
+    group = Dataset
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3, aes(alpha = 0.1)) +
+  scale_x_continuous(
+    breaks = unique(pca_all$PC_num),
+    labels = paste0("PC", unique(pca_all$PC_num))
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 100, by = 10)
+  ) +
+  labs(
+    x = "Principal component",
+    y = "Explained variance (%)",
+    color = NULL
+  ) +
+  scale_color_brewer(type="qual", palette = 6)+
+  theme_bw() +
+  theme(
+    legend.position = c(0.6, 0.7),
+    panel.grid.minor = element_blank(),
+  legend.background = element_rect(
+    fill = "transparent",
+    colour = NA
+  ),
+  legend.box.background = element_rect(
+    fill = "transparent",
+    colour = NA
+  )
+  )+
+  guides(alpha = "none")
+```
+
+```{r}
+ggplot(
+  pca_all,
+  aes(
+    x = PC_num,
+    y = Cumulative,
+    color = Dataset,
+    group = Dataset
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3, aes(alpha = 0.1)) +
+  scale_x_continuous(
+    breaks = unique(pca_all$PC_num),
+    labels = paste0("PC", unique(pca_all$PC_num))
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 100, by = 5),
+    limits = c(60, 100)
+  ) +
+  scale_color_brewer(type = "qual", palette = 6) +
+  labs(
+    x = "Principal component",
+    y = "Cumulative explained variance (%)",
+    color = NULL
+  ) +
+  theme_bw()+
+  theme(
+    legend.position = c(0.65, 0.66),
+    panel.grid.minor = element_blank(),
+    legend.background = element_rect(
+      fill = "transparent",
+      colour = NA
+    ),
+    legend.box.background = element_rect(
+      fill = "transparent",
+      colour = NA
+    )
+  )+
+  guides(alpha = "none")
+
+ggsave("Figures/PCA_cumulative_plot.png", width = 6, height = 4, dpi = 600)
+```
+
+
+# Discriminant Analysis
+```{r}
+library(MASS)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(viridis)
+
+lda_data <- final_data_ilr %>%
+  mutate(
+    yield_class = case_when(
+      Yield_avg <= 40 ~ "Low",
+      Yield_avg > 40 & Yield_avg <= 60 ~ "Average",
+      Yield_avg > 60 & Yield_avg <= 80 ~ "High",
+      Yield_avg > 80 ~ "Very high"
+    ),
+    yield_class = factor(
+      yield_class,
+      levels = c("Low", "Average", "High", "Very high")
+    )
+  ) %>%
+  dplyr::select(yield_class, ILR1:ILR8) %>%
+  na.omit()
+
+lda_mod <- lda(yield_class ~ ., data = lda_data)
+
+lda_scores <- as.data.frame(predict(lda_mod)$x) %>%
+  bind_cols(lda_data %>% dplyr::select(yield_class))
+
+lda_arrows <- cor(
+  lda_data %>% dplyr::select(ILR1:ILR8),
+  lda_scores %>% dplyr::select(LD1, LD2)
+) %>%
+  as.data.frame()
+
+lda_arrows$var <- rownames(lda_arrows)
+
+arrow_scale <- 2.5
+
+ggplot(lda_scores,
+       aes(x = LD1, y = LD2, color = yield_class, fill = yield_class)) +
+  
+  stat_ellipse(
+    geom = "polygon",
+    type = "norm",
+    level = 0.95,
+    alpha = 0.2,
+    linewidth = 0.3
+  ) +
+  
+  geom_point(alpha = 0.35, size = 1.2) +
+  
+  geom_segment(
+    data = lda_arrows,
+    aes(x = 0, y = 0,
+        xend = LD1 * arrow_scale,
+        yend = LD2 * arrow_scale),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.22, "cm")),
+    color = "black",
+    linewidth = 0.7
+  ) +
+  
+  geom_text_repel(
+    data = lda_arrows,
+    aes(x = LD1 * arrow_scale,
+        y = LD2 * arrow_scale,
+        label = var),
+    inherit.aes = FALSE,
+    color = "black",
+    size = 4
+  ) +
+  
+  scale_color_viridis_d(
+    name = "Yield class",
+    option = "D",
+    direction = 1
+  ) +
+  
+  scale_fill_viridis_d(
+    name = "Yield class",
+    option = "D",
+    direction = 1
+  ) +
+  
+  coord_equal() +
+  theme_bw() +
+  labs(
+    title = "",
+    x = "First discriminant axis",
+    y = "Second discriminant axis"
+  )
+ggsave("Figures/DA_plot.png", width = 5, height = 4, dpi = 600)
+```
+
+
+
