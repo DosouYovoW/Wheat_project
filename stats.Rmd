@@ -8,11 +8,6 @@ date: "2026-05-01"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
-citation()
-R.version.string
-```
-
 # Load Libraries
 ```{r}
 library(tidyverse)
@@ -87,27 +82,6 @@ final_data <- AL1_3_wheat_2020_40m_buffer %>%
     BSI = ((B11 + B04) - (B08 + B02)) /
       ((B11 + B04) + (B08 + B02))
   )
-    
-   # NDWI  = (B03 - B08) / (B03 + B08),
-   # NDSI  = (B03 - B11) / (B03 + B11),
-   # NBR   = (B08 - B12) / (B08 + B12),
-   # NDBI  = (B11 - B08) / (B11 + B08),
-    
-    
-   
-
-    # 🌱 Chlorophyll (Nitrogen-sensitive)
-    #CIgreen    = (B08 / B03) - 1,
-    
-
-    # 🌍 Soil-adjusted vegetation
-    
-
-    # 🌿 Enhanced vegetation index (better in dense canopy)
-   # EVI = 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1)
-   # Scale bands to 0-1 range first
-
-  
 ```
 
 ```{r}
@@ -124,7 +98,6 @@ AL1_3_wheat_2020_40m_buffer %>%
   )
 ```
 
-
 ```{r}
 ggplot(final_data,
        aes(x = (left + right)/2,
@@ -136,8 +109,6 @@ ggplot(final_data,
   coord_fixed() +
   theme_bw()
 ```
-
-
 
 ```{r}
 data_model <- final_data |> 
@@ -385,8 +356,6 @@ p_ilr_box <- final_data_ilr %>%
 p_vi_box / p_ilr_box
 ```
 
-
-
 # ILR Correlation analysis
 ```{r}
 ilr_data <- data_model_ilr %>%
@@ -526,9 +495,6 @@ VI_corr_plot + ilr_corr_plot
 ggsave("Figures/corr_plot.png", width = 10, height = 5, dpi = 600)
 ```
 
-
-
-
 ```{r}
 data_model_band <- final_data %>%
   dplyr::select(
@@ -553,7 +519,6 @@ ggcorr(data_model_band %>%
     panel.grid = element_blank()
   )
 ```
-
 
 ```{r}
 rec <- recipe(Yield_avg ~ ., data = data_model) %>%
@@ -746,7 +711,6 @@ ggsave(
 ggsave("Figures/combined_plot.png", width = 10, height = 5, dpi = 600)
 ```
 
-
 ```{r}
 get_pca_var <- function(data, vars, label) {
   
@@ -875,102 +839,3 @@ ggplot(
 
 ggsave("Figures/PCA_cumulative_plot.png", width = 6, height = 4, dpi = 600)
 ```
-
-
-# Discriminant Analysis
-```{r}
-library(MASS)
-library(dplyr)
-library(ggplot2)
-library(ggrepel)
-library(viridis)
-
-lda_data <- final_data_ilr %>%
-  mutate(
-    yield_class = case_when(
-      Yield_avg <= 40 ~ "Low",
-      Yield_avg > 40 & Yield_avg <= 60 ~ "Average",
-      Yield_avg > 60 & Yield_avg <= 80 ~ "High",
-      Yield_avg > 80 ~ "Very high"
-    ),
-    yield_class = factor(
-      yield_class,
-      levels = c("Low", "Average", "High", "Very high")
-    )
-  ) %>%
-  dplyr::select(yield_class, ILR1:ILR8) %>%
-  na.omit()
-
-lda_mod <- lda(yield_class ~ ., data = lda_data)
-
-lda_scores <- as.data.frame(predict(lda_mod)$x) %>%
-  bind_cols(lda_data %>% dplyr::select(yield_class))
-
-lda_arrows <- cor(
-  lda_data %>% dplyr::select(ILR1:ILR8),
-  lda_scores %>% dplyr::select(LD1, LD2)
-) %>%
-  as.data.frame()
-
-lda_arrows$var <- rownames(lda_arrows)
-
-arrow_scale <- 2.5
-
-ggplot(lda_scores,
-       aes(x = LD1, y = LD2, color = yield_class, fill = yield_class)) +
-  
-  stat_ellipse(
-    geom = "polygon",
-    type = "norm",
-    level = 0.95,
-    alpha = 0.2,
-    linewidth = 0.3
-  ) +
-  
-  geom_point(alpha = 0.35, size = 1.2) +
-  
-  geom_segment(
-    data = lda_arrows,
-    aes(x = 0, y = 0,
-        xend = LD1 * arrow_scale,
-        yend = LD2 * arrow_scale),
-    inherit.aes = FALSE,
-    arrow = arrow(length = unit(0.22, "cm")),
-    color = "black",
-    linewidth = 0.7
-  ) +
-  
-  geom_text_repel(
-    data = lda_arrows,
-    aes(x = LD1 * arrow_scale,
-        y = LD2 * arrow_scale,
-        label = var),
-    inherit.aes = FALSE,
-    color = "black",
-    size = 4
-  ) +
-  
-  scale_color_viridis_d(
-    name = "Yield class",
-    option = "D",
-    direction = 1
-  ) +
-  
-  scale_fill_viridis_d(
-    name = "Yield class",
-    option = "D",
-    direction = 1
-  ) +
-  
-  coord_equal() +
-  theme_bw() +
-  labs(
-    title = "",
-    x = "First discriminant axis",
-    y = "Second discriminant axis"
-  )
-ggsave("Figures/DA_plot.png", width = 5, height = 4, dpi = 600)
-```
-
-
-

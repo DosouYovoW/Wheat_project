@@ -103,7 +103,6 @@ VI_rf_final <- last_fit(
 )
 ```
 
-
 # Compare performance
 ```{r}
 model_results_VI <- bind_rows(
@@ -324,7 +323,6 @@ metrics_table_VI <- all_predictions_VI %>%
 
 metrics_table_VI
 ```
-
 
 # Variable importance for Random Forest
 ```{r}

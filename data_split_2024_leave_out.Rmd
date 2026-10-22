@@ -188,8 +188,6 @@ stopifnot(
 )
 ```
 
-
-
 # Cross-validation
 ```{r}
 set.seed(123)

@@ -87,11 +87,9 @@ rf_tune <- tune_grid(
 stopCluster(cl)
 ```
 
-
 ```{r}
 show_best(rf_tune, metric = "rsq", n = 10)
 ```
-
 
 # Best models based on RMSE
 ```{r}
@@ -121,7 +119,6 @@ model_results
 
 ```
 
-
 # Get predictions
 ```{r}
 rf_pred <- collect_predictions(rf_final) %>%
@@ -129,7 +126,6 @@ rf_pred <- collect_predictions(rf_final) %>%
 
 all_predictions <- rf_pred
 ```
-
 
 # Observed vs predicted plot
 ```{r}
@@ -315,8 +311,6 @@ metrics_table <- all_predictions_ilr %>%
 
 metrics_table
 ```
-
-
 
 # RMSE comparison plot
 ```{r}

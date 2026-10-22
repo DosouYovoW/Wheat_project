@@ -80,11 +80,9 @@ rf_tune <- tune_grid(
 stopCluster(cl)
 ```
 
-
 ```{r}
 show_best(rf_tune, metric = "rsq", n = 10)
 ```
-
 
 # Best models based on RMSE
 ```{r}
@@ -111,7 +109,6 @@ model_results <-
   pivot_wider(names_from = .metric, values_from = .estimate)
 
 model_results
-
 ```
 
 
@@ -122,7 +119,6 @@ rf_pred <- collect_predictions(rf_final) %>%
 
 all_predictions <- rf_pred
 ```
-
 
 # Observed vs predicted plot
 ```{r}
@@ -230,6 +226,7 @@ ILR_pred <- all_predictions_ilr %>%
 ILR_pred
 ggsave("Figures/Figures_01/ILR_pred_plot.png", width = 6, height = 5, dpi = 600)
 ```
+
 ```{r}
 ilr_pred <- all_predictions_ilr %>%
   filter(dataset == "Validation (2024)") %>%
@@ -307,7 +304,6 @@ metrics_table <- all_predictions_ilr %>%
 
 metrics_table
 ```
-
 
 # Variable importance for Random Forest
 ```{r}

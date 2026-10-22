@@ -99,7 +99,6 @@ VI_rf_final <- last_fit(
 )
 ```
 
-
 # Compare performance
 ```{r}
 model_results_VI <- collect_metrics(VI_rf_final)  %>% mutate(model = "Random Forest") %>%
